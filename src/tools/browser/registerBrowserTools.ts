@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { SecurityPolicy } from '../../security/securityPolicy.js';
 import { SessionRegistry } from '../../sessions/SessionRegistry.js';
 import {
   domQuerySchema,
@@ -25,7 +26,11 @@ import { generateLocatorCandidates, extractPageSnapshot, formatPageStructure } f
 import { imageResult, jsonResult, textResult } from '../../utils/mcp.js';
 import { withSession } from './browserToolUtils.js';
 
-export const registerBrowserTools = (server: McpServer, registry: SessionRegistry): void => {
+export const registerBrowserTools = (
+  server: McpServer,
+  registry: SessionRegistry,
+  securityPolicy: SecurityPolicy,
+): void => {
   server.registerTool(
     'browser_navigate',
     {
@@ -34,6 +39,13 @@ export const registerBrowserTools = (server: McpServer, registry: SessionRegistr
       inputSchema: navigateSchema,
     },
     withSession(registry, async ({ page }, { url }) => {
+      // Outermost, least-trusted layer. It gives the agent an immediate, readable error and
+      // stops `file://` before the page loads -- a `file://` navigation is not an HTTP request,
+      // so `context.route()` never sees it. It is NOT the control: `browser_evaluate` can
+      // navigate without touching this argument. The context-level route handler installed in
+      // SessionRegistry.startSession is what actually enforces scope.
+      securityPolicy.assertNavigationAllowed(url);
+
       const response = await page.goto(url, { waitUntil: 'domcontentloaded' });
 
       return jsonResult({
@@ -364,15 +376,20 @@ export const registerBrowserTools = (server: McpServer, registry: SessionRegistr
     'browser_upload_file',
     {
       title: 'Browser Upload File',
-      description: 'Upload files to a file input.',
+      description:
+        'Upload files to a file input. Paths must resolve inside a configured upload directory.',
       inputSchema: uploadFileSchema,
     },
     withSession(registry, async ({ page }, { selector, filePaths }) => {
-      await page.locator(selector).first().setInputFiles(filePaths);
+      // `..` and symlinks are collapsed before the containment check, so the browser cannot be
+      // used to post an arbitrary local file to a remote form.
+      const resolvedPaths = securityPolicy.resolveUploadPaths(filePaths);
+
+      await page.locator(selector).first().setInputFiles(resolvedPaths);
 
       return jsonResult({
         selector,
-        filePaths,
+        filePaths: resolvedPaths,
       });
     }),
   );

@@ -1,7 +1,17 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
+import { BlockedRequestLog, SecurityPolicy } from '../../security/securityPolicy.js';
 import type { SessionRecord } from '../../types/session.js';
 import { registerBrowserTools } from './registerBrowserTools.js';
+
+/** No allowlist configured: the documented permissive default. */
+const permissivePolicy = (): SecurityPolicy =>
+  new SecurityPolicy({
+    allowedOrigins: [],
+    blockedOrigins: [],
+    blockedSchemes: [],
+    allowedUploadDirectories: [],
+  });
 
 class FakeServer {
   readonly tools = new Map<string, (args: unknown) => Promise<unknown>>();
@@ -71,6 +81,8 @@ const createSession = (): SessionRecord => {
     sessionName: null,
     createdAt: new Date().toISOString(),
     lastUsedAt: new Date().toISOString(),
+    blockedRequests: new BlockedRequestLog(),
+    ownerId: 'test-owner',
   };
 };
 
@@ -82,7 +94,7 @@ describe('registerBrowserTools', () => {
       getSessionOrThrow: vi.fn(() => session),
     };
 
-    registerBrowserTools(fakeServer as unknown as McpServer, registry as never);
+    registerBrowserTools(fakeServer as unknown as McpServer, registry as never, permissivePolicy());
 
     const navigate = fakeServer.tools.get('browser_navigate');
     const screenshot = fakeServer.tools.get('browser_screenshot');
@@ -112,7 +124,7 @@ describe('registerBrowserTools', () => {
       }),
     };
 
-    registerBrowserTools(fakeServer as unknown as McpServer, registry as never);
+    registerBrowserTools(fakeServer as unknown as McpServer, registry as never, permissivePolicy());
 
     const navigate = fakeServer.tools.get('browser_navigate');
     const result = (await navigate?.({
@@ -131,7 +143,7 @@ describe('registerBrowserTools', () => {
       getSessionOrThrow: vi.fn(() => session),
     };
 
-    registerBrowserTools(fakeServer as unknown as McpServer, registry as never);
+    registerBrowserTools(fakeServer as unknown as McpServer, registry as never, permissivePolicy());
 
     const click = fakeServer.tools.get('browser_click');
     const fillForm = fakeServer.tools.get('browser_fill_form');
@@ -187,7 +199,7 @@ describe('registerBrowserTools', () => {
     const session = createSession();
     const registry = { getSessionOrThrow: vi.fn(() => session) };
 
-    registerBrowserTools(fakeServer as unknown as McpServer, registry as never);
+    registerBrowserTools(fakeServer as unknown as McpServer, registry as never, permissivePolicy());
 
     const snapshot = fakeServer.tools.get('browser_snapshot');
     const result = (await snapshot?.({
@@ -207,7 +219,7 @@ describe('registerBrowserTools', () => {
     const session = createSession();
     const registry = { getSessionOrThrow: vi.fn(() => session) };
 
-    registerBrowserTools(fakeServer as unknown as McpServer, registry as never);
+    registerBrowserTools(fakeServer as unknown as McpServer, registry as never, permissivePolicy());
 
     const domQuery = fakeServer.tools.get('browser_dom_query');
     const result = (await domQuery?.({
@@ -232,7 +244,7 @@ describe('registerBrowserTools', () => {
     });
     const registry = { getSessionOrThrow: vi.fn(() => session) };
 
-    registerBrowserTools(fakeServer as unknown as McpServer, registry as never);
+    registerBrowserTools(fakeServer as unknown as McpServer, registry as never, permissivePolicy());
 
     const domQuery = fakeServer.tools.get('browser_dom_query');
     const result = (await domQuery?.({
@@ -262,7 +274,7 @@ describe('registerBrowserTools', () => {
     });
     const registry = { getSessionOrThrow: vi.fn(() => session) };
 
-    registerBrowserTools(fakeServer as unknown as McpServer, registry as never);
+    registerBrowserTools(fakeServer as unknown as McpServer, registry as never, permissivePolicy());
 
     const domQuery = fakeServer.tools.get('browser_dom_query');
     const result = (await domQuery?.({

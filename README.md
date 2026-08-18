@@ -47,9 +47,16 @@ Each browser session gets a numeric ID like `1`, `2`, `3`, and every `browser_*`
 
 ## Quick Start
 
+**npm is the supported package manager for this fork.** Install with `npm install
+--ignore-scripts` -- lifecycle scripts run on a plain install, and avoiding unaudited execution at
+install time is part of this fork's threat model. There is no `pnpm-lock.yaml`; a stale one that
+still resolved an already-removed dependency was deleted rather than kept out of sync. Do not run
+`pnpm install` in this repo -- with no lockfile pnpm will resolve its own tree from
+`package.json`, which is untested here.
+
 ```bash
-corepack pnpm install
-corepack pnpm build
+npm install --ignore-scripts
+npm run build
 ```
 
 Run locally over stdio:
@@ -96,6 +103,141 @@ Recommended config shape:
   }
 }
 ```
+
+### Security policy: origin allowlist and upload directories
+
+Like `launchOptions`, this is configured at the server level and is **not** reachable from any tool
+argument, so a calling agent cannot widen its own scope.
+
+```json
+{
+  "security": {
+    "allowedOrigins": ["app.example.com", "*.api.example.com", "127.0.0.1:8080"],
+    "blockedOrigins": ["admin.example.com"],
+    "blockedSchemes": [],
+    "allowedUploadDirectories": ["/srv/engagement/uploads"]
+  }
+}
+```
+
+Equivalent env vars (`;`-separated): `BROWSER_MCP_ALLOWED_ORIGINS`, `BROWSER_MCP_BLOCKED_ORIGINS`,
+`BROWSER_MCP_BLOCKED_SCHEMES`, `BROWSER_MCP_ALLOWED_UPLOAD_DIRS`.
+
+**Where it is enforced.** In the browser layer, not in tool arguments. `browser_evaluate` runs
+arbitrary JavaScript in the page, so validating the `url` argument of `browser_navigate` would stop
+nothing -- page script can set `location.href`, `fetch`, inject an iframe or call `window.open`. The
+allowlist is therefore applied with `BrowserContext.route()` (plus `routeWebSocket()`), which every
+request passes through regardless of what triggered it. The argument check on `browser_navigate` is
+kept as an outermost, least-trusted layer only, for a fast readable error and to stop `file://`
+before it loads.
+
+**Matching rules** (same vocabulary and semantics as `@playwright/mcp`'s `--allowed-origins` /
+`--blocked-origins`):
+
+| Entry | Matches |
+|---|---|
+| `example.com` | `http://example.com`, `https://example.com` -- **default port only** |
+| `example.com:8443` | that host on that port |
+| `example.com:*` | that host on any port |
+| `*.example.com` | any subdomain; **not** the apex -- list `example.com` separately |
+| `https://example.com` | that scheme only |
+| `[::1]:8080` | IPv6 literal |
+
+A target on a non-standard port must name the port, or use `:*`. Entries that do not parse are
+rejected at start-up rather than silently never matching.
+
+**Defaults.** Permissive: with no `allowedOrigins` configured every origin is reachable, and with no
+`allowedUploadDirectories` configured `browser_upload_file` is unrestricted. Both are announced on
+stderr at start-up and in the MCP `instructions`. Once an allowlist *is* configured it fails closed:
+anything that does not match is blocked, including schemes that carry no matchable origin.
+
+**Always on, regardless of configuration.** `file:`, `filesystem:`, `chrome:`, `chrome-untrusted:`,
+`chrome-extension:`, `devtools:` and `view-source:` are always refused, and only `about:blank` /
+`about:srcdoc` are permitted among `about:` URLs. `blockedSchemes` adds to this list; it cannot
+remove from it. `file://` matters most: it reads local disk and never crosses an HTTP proxy, so
+proxy-history auditing cannot see it.
+
+**Uploads.** `browser_upload_file` resolves `..` and then symlinks (`realpath`) before checking
+containment, so a path that escapes the allowlist is rejected however it is spelled.
+
+**Visibility.** Every block is logged to stderr and appended to the result of the tool call that
+caused it, naming the blocked origin -- a silently dropped request is indistinguishable from a
+broken target.
+
+**Known gaps.** See `HARDENING-2.md` for what is and is not caught, with measurements.
+
+### Provider allowlist
+
+`start_session` accepts a `provider` argument, but *which* providers it may choose from is
+server config, not something the calling agent controls -- the same pattern as `launchOptions`
+and the origin allowlist above.
+
+```json
+{
+  "security": {
+    "allowedProviders": ["playwright"]
+  }
+}
+```
+
+Env var (`;`-separated): `BROWSER_MCP_ALLOWED_PROVIDERS`.
+
+**Default: `["playwright"]`, not permissive.** This is the one place in `security` that does NOT
+follow the origin/upload allowlists' "unset means permissive" convention -- there is no safe
+permissive default for "which third-party cloud may this session's traffic go to", so an unset
+`allowedProviders` means local-only, not "every provider". A `start_session` call for a provider
+outside the list is refused before that provider's SDK is ever invoked (so before any call
+leaves the machine), with an error naming both what was requested and what is permitted. A
+misconfigured `defaultProvider` that isn't itself in the allowlist fails at server start-up, not
+on the first `start_session` call.
+
+To use `browserbase`, `anchor`, or `cloudflare`, add them to `allowedProviders` explicitly, in
+addition to setting their credentials.
+
+### Secrets in `start_session` / `get_sessions` responses
+
+`resolvedProviderConfig` is returned so a calling agent can see what its session is actually
+configured with -- but a proxy password or cloud API key has no reason to be readable in that
+response, since it just gets echoed into the agent's context (and therefore into transcripts and
+orchestrator logs). Secret-shaped values are redacted before the response leaves the server:
+
+```json
+"resolvedProviderConfig": {
+  "launchOptions": {
+    "proxy": { "server": "http://127.0.0.1:8080", "username": "burpuser", "password": "***redacted***" }
+  }
+}
+```
+
+Redaction is by key semantics (`password`, `apiKey`, `token`, `secret`, and similar, matched
+case- and separator-insensitively) at any nesting depth inside `launchOptions` /
+`contextOptions` / `sessionOptions` / `proxy` -- not a fixed list of exact field names, so e.g.
+`proxyPassword` is caught the same way `password` is. A secret value that is genuinely unset
+(`null`) is left as `null` rather than redacted, so an agent can still tell "not configured"
+apart from "configured, but hidden".
+
+### Session ownership
+
+Every session has an owner. `start_session` accepts an optional `ownerId`; if you omit it, the
+server assigns a private, unguessable one and returns it in the response -- either way, you need
+that value to close the session again.
+
+- `close_session` requires the `ownerId` the session was started with. Closing a session owned by
+  a different caller is refused.
+- `close_all_sessions` with `ownerId` closes only sessions owned by that id -- always allowed,
+  and the self-service cleanup a subagent should use for its own sessions.
+- `close_all_sessions` with **no** `ownerId` would close every session on the server, including
+  other callers' -- refused unless the operator sets `security.allowUnscopedCloseAll: true`
+  (env: `BROWSER_MCP_ALLOW_UNSCOPED_CLOSE_ALL`). Off by default.
+
+This exists for multi-agent orchestration: with a dozen concurrent subagents sharing one server
+process, an unscoped `close_all_sessions` from any one of them is an accidental denial of service
+against every other agent's browser. `ownerId` is caller-supplied and not cryptographically
+verified against a transport-level identity (MCP over stdio has no such identity to check), so
+it protects against an agent accidentally tearing down sessions it does not recognize as its
+own -- not against a deliberately malicious one. `get_sessions` never includes `ownerId` in its
+listing, so it cannot be used to read another caller's ownership token; the only place it is
+ever returned is the `start_session` response that assigned it.
 
 ### Stealth Chromium via CloakBrowser
 
@@ -269,20 +411,21 @@ code --add-mcp '{"name":"parallel-browser-mcp","command":"npx","args":["parallel
 ## Example Flow
 
 1. Call `start_session` with `{ "provider": "playwright" }`
-2. Read the returned session `id`
+2. Read the returned session `id` and `ownerId`
 3. Call `browser_navigate` with `{ "sessionId": 1, "url": "https://example.com" }`
 4. Call any additional `browser_*` tool with the same `sessionId`
-5. Call `close_session` when done
+5. Call `close_session` with `{ "sessionId": 1, "ownerId": "<the ownerId from step 2>" }` when done
 
 ## Development
 
 ```bash
-corepack pnpm install
-corepack pnpm typecheck
-corepack pnpm test
-corepack pnpm test:coverage
-corepack pnpm build
-corepack pnpm smoke:local
+npm install --ignore-scripts
+npm run typecheck
+npm test
+npm run test:coverage
+npm run build
+npm run smoke:local
+npm run smoke:security
 ```
 
 ## Publishing
@@ -296,9 +439,9 @@ This repo is set up to publish as an npm package:
 Before publishing:
 
 ```bash
-corepack pnpm typecheck
-corepack pnpm test
-corepack pnpm build
+npm run typecheck
+npm test
+npm run build
 npm pack --dry-run
 ```
 
@@ -320,6 +463,9 @@ GitHub Actions publishing:
 The repo includes:
 - unit coverage for config loading, providers, registry behavior, session tools, and representative browser tools
 - a local Playwright smoke script in `src/smoke/localSmoke.ts`
+- an end-to-end security-policy proof in `src/smoke/securityPolicySmoke.ts` (`npm run smoke:security`),
+  which drives a real server over stdio against two local origins and asserts, server-side, that the
+  out-of-scope one receives nothing
 
 ## Notes
 
