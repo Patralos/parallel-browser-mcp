@@ -4,10 +4,39 @@ import { providerNameSchema } from './providerConfig.js';
 export const startSessionSchema = z.object({
   provider: providerNameSchema.optional(),
   sessionName: z.string().min(1).max(100).optional(),
+  ownerId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      'Your own identifier, to group sessions you own. Omit it and the server generates a ' +
+        'private one for you (returned in the response) -- either way, you need this value to ' +
+        'close the session later; a session cannot be closed by a different owner.',
+    ),
 });
 
 export const closeSessionSchema = z.object({
   sessionId: z.number().int().positive(),
+  ownerId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Must match the ownerId the session was started with, or the close is refused.'),
+});
+
+export const closeAllSessionsSchema = z.object({
+  ownerId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      'Closes only sessions owned by this ownerId (always allowed). Omit it to close every ' +
+        "session on the server, including other callers' -- refused unless the operator has " +
+        'enabled security.allowUnscopedCloseAll.',
+    ),
 });
 
 export const sessionIdSchema = z.object({

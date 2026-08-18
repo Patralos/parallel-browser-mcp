@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { providerNames, type ProviderName } from '../types/providerConfig.js';
 import {
   type ResolvedServerConfig,
   type ServerConfig,
@@ -35,6 +36,29 @@ const parseList = (value: string | undefined): string[] | undefined => {
     .split(';')
     .map((entry) => entry.trim())
     .filter((entry) => entry !== '');
+};
+
+/**
+ * `security.allowedProviders` from JSON config is already validated by
+ * `providerNameSchema` inside `serverConfigSchema.parse`. The `;`-separated env var bypasses
+ * zod entirely (same as every other `BROWSER_MCP_*` list), so it gets its own check here --
+ * a typo'd provider name must fail loudly at start-up, not silently never match (and therefore
+ * silently allow nothing).
+ */
+const parseProviderList = (raw: string[] | undefined): ProviderName[] | undefined => {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  return raw.map((entry) => {
+    if (!(providerNames as readonly string[]).includes(entry)) {
+      throw new Error(
+        `Invalid entry "${entry}" in BROWSER_MCP_ALLOWED_PROVIDERS: must be one of ${providerNames.join(', ')}.`,
+      );
+    }
+
+    return entry as ProviderName;
+  });
 };
 
 const parseJsonConfig = (rawValue: string, source: string): ServerConfig => {
@@ -89,6 +113,16 @@ export const loadServerConfig = (): ResolvedServerConfig => {
         securityConfig.allowedUploadDirectories ??
         parseList(process.env.BROWSER_MCP_ALLOWED_UPLOAD_DIRS) ??
         [],
+      // NOT permissive-by-default, unlike the fields above: an unset allowlist here means
+      // "playwright only", not "every provider". See securityConfigSchema for why.
+      allowedProviders:
+        securityConfig.allowedProviders ??
+        parseProviderList(parseList(process.env.BROWSER_MCP_ALLOWED_PROVIDERS)) ??
+        ['playwright'],
+      allowUnscopedCloseAll:
+        securityConfig.allowUnscopedCloseAll ??
+        parseBoolean(process.env.BROWSER_MCP_ALLOW_UNSCOPED_CLOSE_ALL) ??
+        false,
     },
     providers: {
       browserbase: {

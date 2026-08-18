@@ -5,11 +5,16 @@ import {
   cloudflareProviderConfigSchema,
   playwrightProviderConfigSchema,
   providerNameSchema,
+  type ProviderName,
 } from '../types/providerConfig.js';
 
 /**
  * Server-level security controls. Operator-set at start-up, never a tool argument, so a calling
  * agent cannot widen its own scope. `allowedOrigins` / `blockedOrigins` mirror `@playwright/mcp`.
+ *
+ * `allowedProviders` and `allowUnscopedCloseAll` follow the same rule: they live here, not in any
+ * tool's input schema, specifically so a calling agent cannot pick its own provider outside the
+ * operator's allowlist or nuke every other session on the server.
  */
 export const securityConfigSchema = z
   .object({
@@ -17,6 +22,19 @@ export const securityConfigSchema = z
     blockedOrigins: z.array(z.string().min(1)).optional(),
     blockedSchemes: z.array(z.string().min(1)).optional(),
     allowedUploadDirectories: z.array(z.string().min(1)).optional(),
+    /**
+     * Which providers `start_session` may launch. Unlike the origin/upload allowlists, this does
+     * NOT default to permissive -- it defaults to `["playwright"]` (local-only). Routing an
+     * engagement's traffic through a third-party cloud provider is a decision an operator must
+     * opt into explicitly; there is no safe permissive default for it the way there is for a
+     * general-purpose browser tool with no origin scope configured.
+     */
+    allowedProviders: z.array(providerNameSchema).optional(),
+    /**
+     * `close_all_sessions` with no `ownerId` closes every session on the server, including other
+     * callers' sessions. Off by default; an operator must opt in.
+     */
+    allowUnscopedCloseAll: z.boolean().optional(),
   })
   .strict();
 
@@ -81,6 +99,13 @@ export interface ResolvedSecurityConfig {
   blockedSchemes: string[];
   /** Empty means `browser_upload_file` is unrestricted (documented permissive default). */
   allowedUploadDirectories: string[];
+  /**
+   * Providers `start_session` may launch. Defaults to `["playwright"]`, NOT permissive -- an
+   * explicitly empty array means "no provider is permitted", not "any provider is permitted".
+   */
+  allowedProviders: ProviderName[];
+  /** Whether `close_all_sessions` may be called with no `ownerId`. Defaults to `false`. */
+  allowUnscopedCloseAll: boolean;
 }
 
 export interface ResolvedServerConfig {

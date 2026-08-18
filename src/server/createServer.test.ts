@@ -10,6 +10,8 @@ describe('createServer', () => {
         blockedOrigins: [],
         blockedSchemes: [],
         allowedUploadDirectories: [],
+        allowedProviders: ['playwright'],
+        allowUnscopedCloseAll: false,
       },
       providers: {
         browserbase: {
@@ -46,5 +48,52 @@ describe('createServer', () => {
 
     expect(browserServer.server).toBeDefined();
     expect(browserServer.registry).toBeDefined();
+  });
+
+  it('fails fast when defaultProvider is not in security.allowedProviders', () => {
+    expect(() =>
+      createServer({
+        defaultProvider: 'browserbase',
+        security: {
+          allowedOrigins: [],
+          blockedOrigins: [],
+          blockedSchemes: [],
+          allowedUploadDirectories: [],
+          allowedProviders: ['playwright'],
+          allowUnscopedCloseAll: false,
+        },
+        providers: {
+          browserbase: {
+            apiKey: null,
+            projectId: null,
+            proxy: null,
+            keepAlive: false,
+            contextId: null,
+            persist: true,
+            sessionOptions: {},
+          },
+          anchor: {
+            apiKey: null,
+            recording: null,
+            proxy: null,
+            timeout: null,
+            sessionOptions: {},
+          },
+          playwright: {
+            launchOptions: {},
+            contextOptions: {},
+            storageStatePath: null,
+            executablePath: null,
+            channel: null,
+            useCloakBrowser: false,
+          },
+          cloudflare: {
+            apiKey: null,
+            accountId: null,
+            keepAlive: null,
+          },
+        },
+      }),
+    ).toThrow(/defaultProvider "browserbase" is not in security.allowedProviders/);
   });
 });

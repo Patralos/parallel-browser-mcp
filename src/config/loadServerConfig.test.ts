@@ -50,13 +50,69 @@ describe('loadServerConfig', () => {
     delete process.env.BROWSER_MCP_CONFIG;
     delete process.env.BROWSER_MCP_ALLOWED_ORIGINS;
     delete process.env.BROWSER_MCP_ALLOWED_UPLOAD_DIRS;
+    delete process.env.BROWSER_MCP_ALLOWED_PROVIDERS;
+    delete process.env.BROWSER_MCP_ALLOW_UNSCOPED_CLOSE_ALL;
 
     expect(loadServerConfig().security).toEqual({
       allowedOrigins: [],
       blockedOrigins: [],
       blockedSchemes: [],
       allowedUploadDirectories: [],
+      // NOT permissive, unlike the origin/upload fields above -- see serverConfig.ts.
+      allowedProviders: ['playwright'],
+      allowUnscopedCloseAll: false,
     });
+  });
+
+  it('defaults allowedProviders to playwright-only, not permissive', () => {
+    delete process.env.BROWSER_MCP_CONFIG;
+    delete process.env.BROWSER_MCP_ALLOWED_PROVIDERS;
+
+    expect(loadServerConfig().security.allowedProviders).toEqual(['playwright']);
+  });
+
+  it('reads allowedProviders from config and from the ;-separated env var', () => {
+    process.env.BROWSER_MCP_CONFIG = JSON.stringify({
+      security: { allowedProviders: ['playwright', 'browserbase'] },
+    });
+
+    expect(loadServerConfig().security.allowedProviders).toEqual(['playwright', 'browserbase']);
+
+    delete process.env.BROWSER_MCP_CONFIG;
+    process.env.BROWSER_MCP_ALLOWED_PROVIDERS = ' playwright ; anchor ;';
+
+    expect(loadServerConfig().security.allowedProviders).toEqual(['playwright', 'anchor']);
+  });
+
+  it('rejects an unknown provider name in the BROWSER_MCP_ALLOWED_PROVIDERS env var', () => {
+    delete process.env.BROWSER_MCP_CONFIG;
+    process.env.BROWSER_MCP_ALLOWED_PROVIDERS = 'playwright;not-a-real-provider';
+
+    expect(() => loadServerConfig()).toThrow(/Invalid entry "not-a-real-provider"/);
+  });
+
+  it('rejects an unknown provider name in security.allowedProviders (JSON config)', () => {
+    process.env.BROWSER_MCP_CONFIG = JSON.stringify({
+      security: { allowedProviders: ['not-a-real-provider'] },
+    });
+
+    expect(() => loadServerConfig()).toThrow(/Invalid browser MCP config/);
+  });
+
+  it('defaults allowUnscopedCloseAll to false and respects env / config overrides', () => {
+    delete process.env.BROWSER_MCP_CONFIG;
+    delete process.env.BROWSER_MCP_ALLOW_UNSCOPED_CLOSE_ALL;
+
+    expect(loadServerConfig().security.allowUnscopedCloseAll).toBe(false);
+
+    process.env.BROWSER_MCP_ALLOW_UNSCOPED_CLOSE_ALL = 'true';
+    expect(loadServerConfig().security.allowUnscopedCloseAll).toBe(true);
+
+    delete process.env.BROWSER_MCP_ALLOW_UNSCOPED_CLOSE_ALL;
+    process.env.BROWSER_MCP_CONFIG = JSON.stringify({
+      security: { allowUnscopedCloseAll: true },
+    });
+    expect(loadServerConfig().security.allowUnscopedCloseAll).toBe(true);
   });
 
   it('reads the security block from config, and from ;-separated env vars', () => {

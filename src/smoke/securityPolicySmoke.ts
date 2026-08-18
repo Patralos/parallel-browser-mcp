@@ -184,7 +184,13 @@ const main = async (): Promise<void> => {
   const call = async (name: string, args: Record<string, unknown>): Promise<string> =>
     toText(await client.callTool({ name, arguments: args }));
 
-  const startResult = await call('start_session', { sessionName: 'policy-smoke' });
+  // Explicit ownerId so the cleanup close_all_sessions call below can use the owner-scoped form
+  // (always allowed) rather than the unscoped one (refused by default -- see HARDENING-3).
+  const smokeOwnerId = 'security-policy-smoke';
+  const startResult = await call('start_session', {
+    sessionName: 'policy-smoke',
+    ownerId: smokeOwnerId,
+  });
   const sessionId = (JSON.parse(startResult) as { id: number }).id;
 
   console.log(`MCP session id ${sessionId}\n`);
@@ -497,7 +503,7 @@ const main = async (): Promise<void> => {
     console.log(`  OUT-OF-SCOPE server received ${outOfScope.upgrades.length} websocket upgrade(s)`);
     console.log(`  OUT-OF-SCOPE UDP port received ${udpPackets.length} datagram(s)`);
   } finally {
-    await call('close_all_sessions', {}).catch(() => undefined);
+    await call('close_all_sessions', { ownerId: smokeOwnerId }).catch(() => undefined);
     await client.close().catch(() => undefined);
     inScope.server.close();
     outOfScope.server.close();

@@ -82,6 +82,7 @@ const createSession = (): SessionRecord => {
     createdAt: new Date().toISOString(),
     lastUsedAt: new Date().toISOString(),
     blockedRequests: new BlockedRequestLog(),
+    ownerId: 'test-owner',
   };
 };
 
