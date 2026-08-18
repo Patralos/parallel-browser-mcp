@@ -5,6 +5,12 @@ describe('createServer', () => {
   it('creates a server and registry', () => {
     const browserServer = createServer({
       defaultProvider: 'playwright',
+      security: {
+        allowedOrigins: [],
+        blockedOrigins: [],
+        blockedSchemes: [],
+        allowedUploadDirectories: [],
+      },
       providers: {
         browserbase: {
           apiKey: null,

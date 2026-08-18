@@ -30,6 +30,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "smoke:local": "tsx src/smoke/localSmoke.ts",
+    "smoke:security": "tsx src/smoke/securityPolicySmoke.ts",
     "version": "node scripts/sync-server-version.mjs && git add server.json",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },

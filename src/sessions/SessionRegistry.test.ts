@@ -1,12 +1,34 @@
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { describe, expect, it, vi } from 'vitest';
 import { BrowserProvider, type ProviderStartSessionParams } from '../providers/BrowserProvider.js';
+import { SecurityPolicy } from '../security/securityPolicy.js';
 import { SessionRegistry } from './SessionRegistry.js';
 import type { StartedBrowserSession } from '../types/session.js';
 
-const createStartedSession = (): StartedBrowserSession => ({
+const testPolicy = (): SecurityPolicy =>
+  new SecurityPolicy({
+    allowedOrigins: [],
+    blockedOrigins: [],
+    blockedSchemes: [],
+    allowedUploadDirectories: [],
+  });
+
+/** Minimal BrowserContext stand-in: just the surface applySecurityPolicyToContext touches. */
+const createFakeContext = (): BrowserContext =>
+  ({
+    close: vi.fn(),
+    route: vi.fn(async () => undefined),
+    routeWebSocket: vi.fn(async () => undefined),
+    addInitScript: vi.fn(async () => undefined),
+    on: vi.fn(),
+    pages: vi.fn(() => []),
+  }) as unknown as BrowserContext;
+
+const createStartedSession = (
+  context: BrowserContext = createFakeContext(),
+): StartedBrowserSession => ({
   browser: { close: vi.fn() } as unknown as Browser,
-  context: { close: vi.fn() } as unknown as BrowserContext,
+  context,
   page: { close: vi.fn() } as unknown as Page,
   providerSessionId: 'remote-1',
   metadata: { test: true },
@@ -42,7 +64,7 @@ class TestProvider extends BrowserProvider {
 describe('SessionRegistry', () => {
   it('allocates sequential numeric IDs', async () => {
     const provider = new TestProvider();
-    const registry = new SessionRegistry(new Map([['playwright', provider]]), 'playwright');
+    const registry = new SessionRegistry(new Map([['playwright', provider]]), 'playwright', testPolicy());
 
     const first = await registry.startSession({});
     const second = await registry.startSession({});
@@ -53,7 +75,7 @@ describe('SessionRegistry', () => {
 
   it('closes a session and removes it from the registry', async () => {
     const provider = new TestProvider();
-    const registry = new SessionRegistry(new Map([['playwright', provider]]), 'playwright');
+    const registry = new SessionRegistry(new Map([['playwright', provider]]), 'playwright', testPolicy());
     const session = await registry.startSession({});
 
     await registry.closeSession(session.id);
@@ -62,9 +84,45 @@ describe('SessionRegistry', () => {
     expect(registry.getSessions()).toHaveLength(0);
   });
 
+  it('installs the security policy on the context before handing the session out', async () => {
+    const context = createFakeContext();
+    const provider = new TestProvider();
+    provider.startSessionMock.mockImplementationOnce(async () => createStartedSession(context));
+    const registry = new SessionRegistry(
+      new Map([['playwright', provider]]),
+      'playwright',
+      testPolicy(),
+    );
+
+    await registry.startSession({});
+
+    // Registered on the context (not the page), so pages opened later inherit it.
+    expect(context.route).toHaveBeenCalledTimes(1);
+    expect(context.routeWebSocket).toHaveBeenCalledTimes(1);
+    expect(context.on).toHaveBeenCalledWith('page', expect.any(Function));
+  });
+
+  it('fails closed when the security policy cannot be installed', async () => {
+    const context = createFakeContext();
+    (context.route as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('route refused'));
+    const provider = new TestProvider();
+    provider.startSessionMock.mockImplementationOnce(async () => createStartedSession(context));
+    const registry = new SessionRegistry(
+      new Map([['playwright', provider]]),
+      'playwright',
+      testPolicy(),
+    );
+
+    await expect(registry.startSession({})).rejects.toThrow(/could not install the security policy/);
+
+    // The half-built, unguarded session must not survive or be reachable.
+    expect(provider.closeSessionMock).toHaveBeenCalledTimes(1);
+    expect(registry.getSessions()).toHaveLength(0);
+  });
+
   it('closes all sessions idempotently', async () => {
     const provider = new TestProvider();
-    const registry = new SessionRegistry(new Map([['playwright', provider]]), 'playwright');
+    const registry = new SessionRegistry(new Map([['playwright', provider]]), 'playwright', testPolicy());
     await registry.startSession({});
     await registry.startSession({});
 

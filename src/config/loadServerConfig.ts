@@ -22,6 +22,21 @@ const parseBoolean = (value: string | undefined): boolean | undefined => {
   return undefined;
 };
 
+/**
+ * Splits a `;`-separated env-var list, matching `@playwright/mcp`'s `--allowed-origins` format.
+ * Returns undefined (not []) when unset, so an explicit empty string can still mean "no entries".
+ */
+const parseList = (value: string | undefined): string[] | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  return value
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+};
+
 const parseJsonConfig = (rawValue: string, source: string): ServerConfig => {
   try {
     return serverConfigSchema.parse(JSON.parse(rawValue));
@@ -53,8 +68,28 @@ export const loadServerConfig = (): ResolvedServerConfig => {
   const playwrightConfig = override.providers.playwright ?? {};
   const cloudflareConfig = override.providers.cloudflare ?? {};
 
+  const securityConfig = override.security ?? {};
+
   return {
     defaultProvider: override.defaultProvider ?? 'playwright',
+    security: {
+      allowedOrigins:
+        securityConfig.allowedOrigins ??
+        parseList(process.env.BROWSER_MCP_ALLOWED_ORIGINS) ??
+        [],
+      blockedOrigins:
+        securityConfig.blockedOrigins ??
+        parseList(process.env.BROWSER_MCP_BLOCKED_ORIGINS) ??
+        [],
+      blockedSchemes:
+        securityConfig.blockedSchemes ??
+        parseList(process.env.BROWSER_MCP_BLOCKED_SCHEMES) ??
+        [],
+      allowedUploadDirectories:
+        securityConfig.allowedUploadDirectories ??
+        parseList(process.env.BROWSER_MCP_ALLOWED_UPLOAD_DIRS) ??
+        [],
+    },
     providers: {
       browserbase: {
         apiKey: process.env.BROWSERBASE_API_KEY ?? null,

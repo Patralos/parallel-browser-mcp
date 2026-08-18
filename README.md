@@ -97,6 +97,68 @@ Recommended config shape:
 }
 ```
 
+### Security policy: origin allowlist and upload directories
+
+Like `launchOptions`, this is configured at the server level and is **not** reachable from any tool
+argument, so a calling agent cannot widen its own scope.
+
+```json
+{
+  "security": {
+    "allowedOrigins": ["app.example.com", "*.api.example.com", "127.0.0.1:8080"],
+    "blockedOrigins": ["admin.example.com"],
+    "blockedSchemes": [],
+    "allowedUploadDirectories": ["/srv/engagement/uploads"]
+  }
+}
+```
+
+Equivalent env vars (`;`-separated): `BROWSER_MCP_ALLOWED_ORIGINS`, `BROWSER_MCP_BLOCKED_ORIGINS`,
+`BROWSER_MCP_BLOCKED_SCHEMES`, `BROWSER_MCP_ALLOWED_UPLOAD_DIRS`.
+
+**Where it is enforced.** In the browser layer, not in tool arguments. `browser_evaluate` runs
+arbitrary JavaScript in the page, so validating the `url` argument of `browser_navigate` would stop
+nothing -- page script can set `location.href`, `fetch`, inject an iframe or call `window.open`. The
+allowlist is therefore applied with `BrowserContext.route()` (plus `routeWebSocket()`), which every
+request passes through regardless of what triggered it. The argument check on `browser_navigate` is
+kept as an outermost, least-trusted layer only, for a fast readable error and to stop `file://`
+before it loads.
+
+**Matching rules** (same vocabulary and semantics as `@playwright/mcp`'s `--allowed-origins` /
+`--blocked-origins`):
+
+| Entry | Matches |
+|---|---|
+| `example.com` | `http://example.com`, `https://example.com` -- **default port only** |
+| `example.com:8443` | that host on that port |
+| `example.com:*` | that host on any port |
+| `*.example.com` | any subdomain; **not** the apex -- list `example.com` separately |
+| `https://example.com` | that scheme only |
+| `[::1]:8080` | IPv6 literal |
+
+A target on a non-standard port must name the port, or use `:*`. Entries that do not parse are
+rejected at start-up rather than silently never matching.
+
+**Defaults.** Permissive: with no `allowedOrigins` configured every origin is reachable, and with no
+`allowedUploadDirectories` configured `browser_upload_file` is unrestricted. Both are announced on
+stderr at start-up and in the MCP `instructions`. Once an allowlist *is* configured it fails closed:
+anything that does not match is blocked, including schemes that carry no matchable origin.
+
+**Always on, regardless of configuration.** `file:`, `filesystem:`, `chrome:`, `chrome-untrusted:`,
+`chrome-extension:`, `devtools:` and `view-source:` are always refused, and only `about:blank` /
+`about:srcdoc` are permitted among `about:` URLs. `blockedSchemes` adds to this list; it cannot
+remove from it. `file://` matters most: it reads local disk and never crosses an HTTP proxy, so
+proxy-history auditing cannot see it.
+
+**Uploads.** `browser_upload_file` resolves `..` and then symlinks (`realpath`) before checking
+containment, so a path that escapes the allowlist is rejected however it is spelled.
+
+**Visibility.** Every block is logged to stderr and appended to the result of the tool call that
+caused it, naming the blocked origin -- a silently dropped request is indistinguishable from a
+broken target.
+
+**Known gaps.** See `HARDENING-2.md` for what is and is not caught, with measurements.
+
 ### Stealth Chromium via CloakBrowser
 
 The `playwright` provider can optionally launch [CloakBrowser](https://cloakbrowser.dev/) instead of vanilla Chromium for sessions that need to bypass bot detection. Enable it per-config or via env:
@@ -320,6 +382,9 @@ GitHub Actions publishing:
 The repo includes:
 - unit coverage for config loading, providers, registry behavior, session tools, and representative browser tools
 - a local Playwright smoke script in `src/smoke/localSmoke.ts`
+- an end-to-end security-policy proof in `src/smoke/securityPolicySmoke.ts` (`npm run smoke:security`),
+  which drives a real server over stdio against two local origins and asserts, server-side, that the
+  out-of-scope one receives nothing
 
 ## Notes
 
